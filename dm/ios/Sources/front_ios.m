@@ -284,6 +284,24 @@ void front_save_failed(int err) {
     });
 }
 
+// ExecuteProgram needs a fresh process; rebuilding all guest/SDK/Metal global
+// state in this UIKit process is not supported. The handoff is already saved.
+void front_program_restart(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *vc = g_root;
+        while (vc.presentedViewController) vc = vc.presentedViewController;
+        if (!vc) { LOG("[RED] restart: no window; close and reopen the application"); return; }
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Reopen to continue"
+            message:@"Your selection is ready. Close the app, then open it again to continue."
+            preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"Close app" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            (void)action;
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ dm_host_shutdown("ExecuteProgram restart"); });
+        }]];
+        [vc presentViewController:a animated:YES completion:nil];
+    });
+}
+
 // Audio session: the frames RemoteIO asks for in each callback follow the I/O buffer duration, about 21 ms by default on iOS (1024 frames at 48 kHz). The game keeps only 4 blocks × 5 ms = 20 ms in flight,
 // so every callback came up 1.3 ms short and was zero-filled, about 47 gaps per second (crackling; reproducible on the Mac by forcing 1024-frame callbacks: 1999 underruns in 2000 callbacks). Ask for 5 ms and the system picks the nearest it supports;
 // the category is Playback, as a game's or media app's: the ring / silent switch does not mute it (the default SoloAmbient follows the switch, which silenced the game whenever the phone was on silent) and it still interrupts other apps' audio.

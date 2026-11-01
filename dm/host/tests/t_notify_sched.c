@@ -12,6 +12,7 @@ static int observed_wait(pthread_cond_t *, pthread_mutex_t *);
 #define HLE_OE_SOURCE "../hle_oe.c"
 #endif
 #include HLE_OE_SOURCE
+module_t *g_mod; int g_nmod;
 #undef pthread_cond_wait
 static _Atomic int waiting, resumed, finish;
 static uint32_t message;

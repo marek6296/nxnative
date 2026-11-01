@@ -18,6 +18,8 @@ run: $(B)/t_language $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture 
 	$(B)/t_touch
 	$(B)/t_gesture
 	$(B)/t_oe $(QUIET)
+	$(B)/t_oe_launch $(QUIET)
+	$(B)/t_oe_launch_second $(QUIET)
 	$(B)/t_fs $(QUIET)
 	TMPDIR="$(abspath $(B))" $(B)/t_fs_commit_list
 	$(B)/t_thread_leak
@@ -196,7 +198,16 @@ $(B)/t_haptics_apple: t_haptics_apple.m ../haptics_apple.m ../haptics_apple.h ..
 	$(CLANG) -O1 -g -fobjc-arc -Wall -Werror -I.. -o $@ t_haptics_apple.m ../hle_haptics.c -framework Cocoa -framework GameController -framework CoreHaptics -framework IOKit
 $(B)/t_time: t_time.c ../hle_time.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_time.c
-$(B)/t_oe: t_oe.c ../hle_oe.c ../hle.h ../dm.h $(GAME_H) | $(B)
+run: $(B)/t_oe_launch $(B)/t_oe_launch_second
+$(B)/t_oe_launch: t_oe_launch.c ../hle_oe.c ../oe_launch.h ../hle.h ../dm.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_oe_launch.c
+$(B)/t_oe_launch_second: t_oe_launch.c ../hle_oe.c ../oe_launch.h ../hle.h ../dm.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -DTEST_SECOND_PROGRAM -I.. $(GINC) -o $@ t_oe_launch.c
+.PHONY: oe-launch
+oe-launch: $(B)/t_oe_launch $(B)/t_oe_launch_second
+	$(B)/t_oe_launch
+	$(B)/t_oe_launch_second
+$(B)/t_oe: t_oe.c ../hle_oe.c ../oe_launch.h ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_oe.c
 $(B)/t_condvar: t_condvar.c t_condvar_stub.c ../hle_thread.c ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wno-unused-function -DDM_TEST_HOOKS -I.. $(GINC) -o $@ t_condvar.c t_condvar_stub.c ../hle_thread.c
@@ -269,7 +280,7 @@ memory-profile: $(B)/t_svc_memory
 run: memory memory-dirty memory-profile
 
 # A native blocking notification wait must release the thread's guest core.
-$(B)/t_notify_sched: t_notify_sched.c t_condvar_stub.c ../hle_thread.c ../hle_oe.c ../hle.h ../dm.h $(GAME_H) | $(B)
+$(B)/t_notify_sched: t_notify_sched.c t_condvar_stub.c ../hle_thread.c ../hle_oe.c ../oe_launch.h ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -DDM_TEST_THREAD_ENTER -I.. $(GINC) -o $@ t_notify_sched.c t_condvar_stub.c
 .PHONY: notify-scheduler
 notify-scheduler: $(B)/t_notify_sched

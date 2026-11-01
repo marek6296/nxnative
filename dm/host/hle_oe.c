@@ -2,6 +2,8 @@
 // oe::Initialize is in hle_sdkinit.c, not here.
 // Environment switches: DM_OPMODE=0 handheld / 1 console (default: the profile's op_mode, console unless set; console corresponds to the console-mode render profile); DM_LANG=language code (default en-US; the iOS app sets it from the IPA's DMLanguage, main.m).
 #include "hle.h"
+#include "oe_launch.h"
+#include "front.h"
 
 // The operation mode is runtime state (the front end can change it: iOS overheat downgrade switches to handheld): the single source is here, taken once from DM_OPMODE at startup, the environment variable is not read again afterwards
 #include <stdatomic.h>
@@ -104,14 +106,37 @@ HLE_FORCE("_ZN2nn2oe15EnableRecordingEv", "video recording switch; the host has 
 // Applet resource user ID (ARUID, the number am assigns to this process): the host has no am, and the SDK's own getter returns 0. SDK 20's OpenAudioRenderer (the CPU rendering + manual execution path, sdk+0x221730)
 //   aborts when it gets 0 (The Legend of Zelda: Breath of the Wild 1.9.0); SDK 16 did not check. Report a fixed non-zero ID, used only as an identifier
 HLE_FORCE("_ZN2nn6applet23GetAppletResourceUserIdEv", "applet resource user ID; the host returns a fixed non-zero value", uint64_t, h_applet_Aruid, void) { return 0x80; }
-// Launch parameter (present only when another program launched this one with one; returns bool): the host never passes one
-HLE_FORCE("_ZN2nn2oe21TryPopLaunchParameterEPmPvm", "launch parameter: none", unsigned, h_oe_PopLaunchParam, size_t *out, void *buf, size_t n) { (void)buf; (void)n; if (out) *out = 0; return 0; }
+// SDK 11 sdk+0x341b90 copies min(capacity, storage size), reports the full size,
+// and consumes once. The opaque bytes are not interpreted by the host.
+HLE_FORCE("_ZN2nn2oe21TryPopLaunchParameterEPmPvm", "parameters from the previous same-program execution", unsigned, h_oe_PopLaunchParam, size_t *out, void *buf, size_t n) {
+    pthread_once(&g_launch_once, launch_load);
+    pthread_mutex_lock(&g_launch_lock);
+    unsigned have = g_launch_available;
+    if (have) {
+        size_t copy = n < g_launch.size ? n : g_launch.size;
+        if (copy && !buf) die("oe::TryPopLaunchParameter: null output buffer");
+        if (copy) memcpy(buf, g_launch.data, copy);
+        if (out) *out = g_launch.size;
+        g_launch_available = 0;
+    }
+    pthread_mutex_unlock(&g_launch_lock); return have;
+}
 // Tears of the Kingdom (SDK 20.5.22): the index of the program that launched this one in a multi-program application. The SDK asks the applet proxy, which the host never opens
 // (null read in applet::GetPreviousProgramIndex right after the window setup); -1 = launched from the home menu
-HLE_FORCE("_ZN2nn2oe23GetPreviousProgramIndexEv", "previous program index: launched from HOME, -1", int, h_oe_PrevProgram, void) { return -1; }
-// Launch another program of a multi-program application (Octopath Traveler 0 imports it); on hardware it does not return. The host has only this program: logged, and the game carries on
-HLE_FORCE("_ZN2nn2oe14ExecuteProgramEiPKvm", "launch another program of the application: the host runs only this one (logged)", void, h_oe_ExecProgram, int index, const void *param, size_t n) {
-    (void)param; LOG("[RED] oe::ExecuteProgram(%d, %zu bytes of parameters): the host runs only this program; the game carries on", index, n);
+HLE_FORCE("_ZN2nn2oe23GetPreviousProgramIndexEv", "previous program index, -1 for a HOME launch", int, h_oe_PrevProgram, void) { pthread_once(&g_launch_once, launch_load); return g_launch_previous; }
+// Default front end: terminate after a durable handoff; the user reruns the
+// command. iOS overrides this with a Close/reopen prompt.
+__attribute__((weak)) void front_program_restart(void) { LOG("oe: restart prepared; reopen the application to continue"); exit(0); }
+// In-place reset would retain threads, graphics objects and SDK globals. A
+// fresh process is required. Other indices need separately packaged programs.
+HLE_FORCE("_ZN2nn2oe14ExecuteProgramEiPKvm", "persist same-program parameters and request a fresh host process", void, h_oe_ExecProgram, int index, const void *param, size_t n) {
+    pthread_once(&g_launch_once, launch_load);
+    if (index != (int)(DM_GAME_PROGRAM_ID & 255)) die("[RED] oe::ExecuteProgram(%d): another program is not packaged", index);
+    if (!launch_store(param, n)) die("[RED] oe::ExecuteProgram: cannot save launch parameters (errno %d)", errno);
+    LOG("oe::ExecuteProgram(%d): %zu parameter bytes saved; waiting for application restart", index, n);
+    front_program_restart();
+    dm_thread_native_wait(1);
+    for (;;) pause(); // ExecuteProgram must not return to the old game instance
 }
 HLE_FORCE("_ZN2nn2oe16DisableRecordingEv", "video recording switch; the host has no system recording", void, h_oe_DisableRec, void) {}
 // Silence the game's sound in system video captures (through am; FINAL FANTASY RESONANCE imports both): the host records nothing
